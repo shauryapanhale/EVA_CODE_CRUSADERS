@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+eva_env/
+*.egg-info/
+dist/
+build/
+
+# Models
+models/model_weights/*.pkl
+models/model_weights/*.joblib
+
+
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Temporary
+*.tmp
+temp/
+screenshots/
