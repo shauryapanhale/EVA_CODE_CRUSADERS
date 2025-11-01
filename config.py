@@ -4,8 +4,10 @@ import logging
 load_dotenv()
 
 # API Keys
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyD7yJt1qn9rVD8TEUyIA9huDl6MCm6H5mA')
-PICOVOICE_ACCESS_KEY = os.getenv('PICOVOICE_ACCESS_KEY', '8wrQWIEGVr2yXgIlWhJqpb20Y2KhxuECYbLb0/3ARSld8KVGy8gBSQ==')  # ✅ REQUIRED
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY not found in .env file. Please get a key from Google AI Studio and add it to your .env file.")
+
 
 # Wake Word
 WAKE_WORD = "jarvis"

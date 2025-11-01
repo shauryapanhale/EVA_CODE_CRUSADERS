@@ -93,92 +93,132 @@ class OmniParserExecutor:
             raise RuntimeError(f"OmniParser MUST work. Error: {e}")
     
     def parse_screen(self, screenshot_path, user_command):
-        """Parse screenshot - MUST work"""
+        """Parse screenshot with robust error handling - MUST work"""
         try:
             from PIL import Image
             import torch
             import numpy as np
-            
+        
             logger.info(f"📸 Parsing: {screenshot_path}")
-            
+        
             # Load image
             image = Image.open(screenshot_path)
             width, height = image.size
             logger.info(f"Image: {width}x{height}")
-            
+        
             elements = []
             element_id = 1
-            
+        
             # YOLO detection
             logger.info("Running YOLO detection...")
             results = self.som_model.predict(
-                image,
-                conf=0.15,
-                device=self.device,
-                verbose=False
+            image,
+            conf=0.15,
+            device=self.device,
+            verbose=False
             )
-            
+        
             clickable_count = 0
             for box in results[0].boxes:
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 center_x = int((x1 + x2) / 2)
                 center_y = int((y1 + y2) / 2)
                 conf = float(box.conf[0])
-                
+            
                 elements.append({
-                    'id': element_id,
-                    'label': f'UI Element {element_id}',
-                    'x': center_x,
-                    'y': center_y,
-                    'confidence': conf,
-                    'type': 'clickable',
-                    'bbox': [int(x1), int(y1), int(x2), int(y2)]
+                'id': element_id,
+                'label': f'UI Element {element_id}',
+                'x': center_x,
+                'y': center_y,
+                'confidence': conf,
+                'type': 'clickable',
+                'bbox': [int(x1), int(y1), int(x2), int(y2)]
                 })
                 element_id += 1
                 clickable_count += 1
-            
+        
             logger.info(f"✓ YOLO: {clickable_count} elements")
-            
-            # OCR detection
+        
+            # OCR detection with robust parsing
             logger.info("Running OCR...")
             img_array = np.array(image)
-            ocr_result = self.ocr_model.ocr(img_array, cls=False)
-            
+        
+            try:
+                ocr_result = self.ocr_model.ocr(img_array)
+            except Exception as ocr_error:
+                logger.warning(f"OCR call failed: {ocr_error}, continuing with YOLO-only results")
+                ocr_result = None
+        
             text_count = 0
-            if ocr_result and ocr_result[0]:
+            if ocr_result and len(ocr_result) > 0 and ocr_result[0]:
                 for line in ocr_result[0]:
-                    bbox = line[0]
-                    text = line[1][0]
-                    conf = line[1][1]
+                    try:
+                        # Robust parsing: PaddleOCR format is [[x1,y1], [x2,y2], [x3,y3], [x4,y4]], (text, confidence)
+                        if len(line) < 2:
+                            logger.debug(f"Skipping malformed OCR line: {line}")
+                            continue
                     
-                    x_coords = [p[0] for p in bbox]
-                    y_coords = [p[1] for p in bbox]
-                    center_x = int(sum(x_coords) / len(x_coords))
-                    center_y = int(sum(y_coords) / len(y_coords))
+                        bbox = line[0]  # Bounding box coordinates
+                        text_data = line[1]  # Text and confidence
                     
-                    if len(text.strip()) > 1:
-                        elements.append({
+                        # Extract text and confidence safely
+                        if isinstance(text_data, (list, tuple)) and len(text_data) >= 2:
+                            text = str(text_data[0])
+                            conf = float(text_data[1]) if text_data[1] is not None else 0.5
+                        elif isinstance(text_data, str):
+                            # Fallback: if line[1] is just text string
+                            text = str(text_data)
+                            conf = 0.7  # Default confidence
+                        else:
+                            logger.debug(f"Skipping: unknown text_data format: {text_data}")
+                            continue
+                    
+                        # Extract bbox coordinates
+                        if not bbox or len(bbox) < 2:
+                            logger.debug(f"Skipping: invalid bbox: {bbox}")
+                            continue
+                    
+                        x_coords = [float(p[0]) for p in bbox if len(p) >= 2]
+                        y_coords = [float(p[1]) for p in bbox if len(p) >= 2]
+                    
+                        if not x_coords or not y_coords:
+                            logger.debug(f"Skipping: no valid coordinates in bbox")
+                            continue
+                    
+                        center_x = int(sum(x_coords) / len(x_coords))
+                        center_y = int(sum(y_coords) / len(y_coords))
+                    
+                        # Add non-empty text elements
+                        if len(text.strip()) > 1 and conf > 0.3:
+                            elements.append({
                             'id': element_id,
-                            'label': f'Text: {text}',
+                            'label': f'Text: {text[:50]}',  # Truncate long text
                             'x': center_x,
                             'y': center_y,
                             'confidence': conf,
                             'type': 'text',
-                            'bbox': [int(min(x_coords)), int(min(y_coords)),
+                            'bbox': [int(min(x_coords)), int(min(y_coords)), 
                                     int(max(x_coords)), int(max(y_coords))]
-                        })
-                        element_id += 1
-                        text_count += 1
-            
+                            })
+                            element_id += 1
+                            text_count += 1
+                
+                    except (IndexError, ValueError, TypeError) as e:
+                        logger.debug(f"Skipping OCR line due to format error: {e}, line: {line}")
+                        continue
+        
             logger.info(f"✓ OCR: {text_count} text elements")
             logger.info(f"✅ TOTAL: {len(elements)} elements detected")
-            
+        
+            if len(elements) == 0:
+                logger.warning("⚠️ No elements detected (YOLO + OCR both empty)")
+
             return {
-                "elements": elements,
-                "total": len(elements),
-                "resolution": f"{width}x{height}"
+            "elements": elements,
+            "total": len(elements),
+            "resolution": f"{width}x{height}"
             }
-            
+    
         except Exception as e:
-            logger.critical(f"❌ CRITICAL: OmniParser parse failed: {e}")
+            logger.critical(f"❌ CRITICAL: OmniParser parse failed: {e}", exc_info=True)
             raise RuntimeError(f"OmniParser parse MUST work. Error: {e}")

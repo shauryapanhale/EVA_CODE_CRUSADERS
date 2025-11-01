@@ -1,142 +1,94 @@
-"""
-Action Router - Routes commands to appropriate executors
-Executes keyboard and mouse actions for IN_APP
-"""
 import logging
-from colorama import Fore, Style
 import time
-from pynput.keyboard import Controller, Key
-from pynput.mouse import Controller as MouseController
+from pynput.keyboard import Controller as PyKeyboardController, Key as PyKey
+import pyautogui
 
 logger = logging.getLogger("ActionRouter")
-keyboard = Controller()
-mouse = MouseController()
 
 class ActionRouter:
-    """Routes commands and executes steps"""
+    """Action Router with integrated vision capabilities."""
     
-    def __init__(self, system_executor, screenshot_handler):
-        """Initialize action router"""
+    def __init__(self, system_executor, screenshot_handler, screen_analyzer, omniparser):
         self.system_executor = system_executor
         self.screenshot_handler = screenshot_handler
-        logger.info("✓ Action router initialized")
-    
+        self.screen_analyzer = screen_analyzer
+        self.omniparser = omniparser
+        self.py_keyboard = PyKeyboardController()
+        logger.info("✓ Action Router initialized with Vision and C Executor Bridge.")
+
     def execute(self, category, steps, entities, raw_command, classification):
-        """Execute the action"""
-        logger.info(f"📍 Routing {category} command")
+        logger.info(f"🔄 Executing {len(steps)} steps for command: '{raw_command}'")
+        if not steps:
+            return {"success": False, "error": "No execution plan (steps) provided."}
         
         try:
-            if category == 'APP_LAUNCH':
-                return self._execute_app_launch(entities)
-            elif category == 'SYSTEM_ACTION':
-                return self._execute_system_action(entities, classification, raw_command)
-            elif category == 'IN_APP_ACTION':
-                return self._execute_in_app_action(entities, raw_command)
-            elif category == 'WEB_ACTION':
-                return self._execute_web_action(entities, raw_command)
-            else:
-                return {"success": False, "error": f"Unknown category: {category}"}
+            for i, step in enumerate(steps):
+                action_type = step.get('action_type')
+                params = step.get('parameters', {})
+                description = step.get('description', 'No description')
+
+                logger.info(f"  -> Step {i+1}/{len(steps)}: {action_type} - {description}")
+
+                if action_type == "PRESS_KEY":
+                    key_str = params.get('key', '')
+                    if key_str:
+                        self.system_executor.executor.execute_action("PRESS_KEY", {}, {"key": key_str})
+                        logger.info(f"  -> Action successful: Pressed key(s) '{key_str}'")
+                
+                elif action_type == "TYPE_TEXT":
+                    text_to_type = params.get('text', '')
+                    if text_to_type:
+                        self.system_executor.executor.execute_action("TYPE_TEXT", {}, {"text": text_to_type})
+                        logger.info(f"  -> Action successful: Typed '{text_to_type}'")
+                
+                elif action_type == "WAIT":
+                    duration = params.get('duration', 0.5)
+                    time.sleep(float(duration))
+
+                elif action_type == "MOUSE_CLICK" or action_type == "SCREEN_ANALYSIS":
+                    # Vision-powered click
+                    target_description = description # Use the full description as the target
+                    logger.info(f"  -> Vision: Looking for '{target_description}'")
+                    
+                    screenshot_path = self.screenshot_handler.capture()
+                    elements = self.omniparser.parse_screen(screenshot_path, raw_command).get('elements', [])
+                    
+                    if not elements:
+                        logger.error("  -> Vision: OmniParser found no elements on screen.")
+                        # Fallback to a blind click at the current position
+                        self.system_executor.executor.execute_action("MOUSE_CLICK", {}, {"button": "left"})
+                        logger.info("  -> Action successful: Performed blind click")
+                        continue
+
+                    # Use ScreenAnalyzer to select the best coordinate
+                    coordinate = self.screen_analyzer.select_coordinate(elements, target_description, step)
+
+                    if coordinate:
+                        x, y = coordinate
+                        logger.info(f"  -> Vision: Clicking at ({x}, {y}) for '{target_description}'")
+                        self.system_executor.executor.execute_action("MOUSE_CLICK", {'x': x, 'y': y}, {"button": "left"})
+                        logger.info(f"  -> Action successful: Clicked at ({x}, {y})")
+                    else:
+                        logger.warning(f"  -> Vision: Could not find a coordinate for '{target_description}'. Performing blind click.")
+                        self.system_executor.executor.execute_action("MOUSE_CLICK", {}, {"button": "left"})
+                        logger.info("  -> Action successful: Performed blind click")
+
+                elif action_type == "SYSTEM_ACTION":
+                    action = params.get('action', '')
+                    self.system_executor.execute_system_command(action)
+                    logger.info(f"  -> Action successful: Executed system action '{action}'")
+
+                elif action_type == "FOCUS_WINDOW":
+                    title = params.get('title', '')
+                    if title:
+                        self.system_executor.executor.focus_window_by_title(title)
+                        logger.info(f"  -> Action successful: Focused window with title '{title}'")
+
+                else:
+                    logger.warning(f"Unknown action_type: {action_type}. Skipping step.")
+            
+            return {"success": True, "message": "All steps executed successfully."}
+
         except Exception as e:
-            logger.error(f"❌ Execution error: {e}")
+            logger.error(f"❌ Execution error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
-    
-    def _execute_app_launch(self, entities):
-        """Launch application"""
-        app_name = entities.get('app_name', '').lower().rstrip('.')
-        logger.info(f"🚀 Launching app: {app_name}")
-        
-        try:
-            result = self.system_executor.executor.launch_application(app_name)
-            if result.get('success'):
-                print(f"{Fore.GREEN}✅ Opened {app_name}{Style.RESET_ALL}")
-            return result
-        except Exception as e:
-            logger.error(f"❌ App launch failed: {e}")
-            return {"success": False, "error": str(e)}
-    
-    def _execute_system_action(self, entities, classification, raw_command):
-        """Execute volume, brightness, power"""
-        subcategory = classification.get('subcategory', '').lower()
-        logger.info(f"⚙️ System action: {subcategory}")
-        
-        try:
-            if subcategory == 'volume':
-                import re
-                match = re.search(r'(\d+)', raw_command)
-                if match:
-                    level = int(match.group(1))
-                    result = self.system_executor.set_volume(level)
-                    if result.get('success'):
-                        print(f"{Fore.GREEN}✅ {result['message']}{Style.RESET_ALL}")
-                    return result
-                return {"success": False, "error": "No volume level found"}
-            
-            elif subcategory == 'brightness':
-                import re
-                match = re.search(r'(\d+)', raw_command)
-                if match:
-                    level = int(match.group(1))
-                    result = self.system_executor.set_brightness(level)
-                    if result.get('success'):
-                        print(f"{Fore.GREEN}✅ {result['message']}{Style.RESET_ALL}")
-                    return result
-                return {"success": False, "error": "No brightness level found"}
-            
-            elif subcategory in ['shutdown', 'restart', 'sleep', 'lock']:
-                result = self.system_executor.execute_system_command(subcategory)
-                if result.get('success'):
-                    print(f"{Fore.GREEN}✅ {result['message']}{Style.RESET_ALL}")
-                return result
-            
-            else:
-                return {"success": False, "error": f"Unknown system action"}
-        
-        except Exception as e:
-            logger.error(f"❌ System action error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    def _execute_in_app_action(self, entities, raw_command):
-        """Execute IN_APP_ACTION: close, click, type"""
-        action = entities.get('action', '').lower()
-        logger.info(f"🔄 In-app action: {action}")
-        
-        try:
-            if action == 'close':
-                # Alt+F4 to close window
-                keyboard.press(Key.alt)
-                keyboard.press(Key.f4)
-                keyboard.release(Key.f4)
-                keyboard.release(Key.alt)
-                time.sleep(0.5)
-                print(f"{Fore.GREEN}✅ Window closed{Style.RESET_ALL}")
-                return {"success": True, "message": "Window closed"}
-            
-            elif action == 'click':
-                # Click center of screen
-                mouse.click()
-                time.sleep(0.3)
-                print(f"{Fore.GREEN}✅ Clicked{Style.RESET_ALL}")
-                return {"success": True, "message": "Clicked"}
-            
-            elif action == 'type':
-                # Extract text to type
-                import re
-                match = re.search(r'type\s+(.+)', raw_command, re.IGNORECASE)
-                if match:
-                    text = match.group(1)
-                    keyboard.type(text)
-                    time.sleep(0.2)
-                    print(f"{Fore.GREEN}✅ Typed: {text}{Style.RESET_ALL}")
-                    return {"success": True, "message": f"Typed: {text}"}
-            
-            else:
-                return {"success": False, "error": f"Unknown in-app action: {action}"}
-        
-        except Exception as e:
-            logger.error(f"❌ In-app action error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    def _execute_web_action(self, entities, raw_command):
-        """Execute WEB_ACTION"""
-        logger.info(f"🌐 Web action")
-        return {"success": True, "message": "Web action completed"}

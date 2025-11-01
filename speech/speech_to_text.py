@@ -2,28 +2,34 @@
 Speech-to-text using Faster Whisper
 Simple, robust recording without over-engineering
 """
+
 from faster_whisper import WhisperModel
 import pyaudio
 import wave
 import tempfile
 import os
+import logging
 import config
-from utils.logger import setup_logger
+
+logger = logging.getLogger("SpeechToText")
 
 class SpeechToText:
     """Convert speech to text using Faster Whisper"""
     
     def __init__(self):
-        self.logger = setup_logger('SpeechToText')
+        self.logger = logging.getLogger("SpeechToText")
         
         # Initialize Faster Whisper model
-        self.model = WhisperModel(
-            config.WHISPER_MODEL_SIZE,
-            device=config.WHISPER_DEVICE,
-            compute_type=config.WHISPER_COMPUTE_TYPE
-        )
-        
-        self.logger.info(f"Faster Whisper model loaded: {config.WHISPER_MODEL_SIZE}")
+        try:
+            self.model = WhisperModel(
+                "large",
+                device="cpu",
+                compute_type="int8"
+            )
+            self.logger.info(f"Faster Whisper model loaded: large")
+        except Exception as e:
+            self.logger.error(f"Failed to load Whisper: {e}")
+            raise
     
     def record_audio(self, duration=10):
         """
@@ -32,11 +38,14 @@ class SpeechToText:
         
         Args:
             duration: Recording duration in seconds (10 = good balance)
+        
+        Returns:
+            str: Path to temporary WAV file
         """
-        CHUNK = config.CHUNK_SIZE  # Usually 1024
+        CHUNK = 1024
         FORMAT = pyaudio.paInt16
         CHANNELS = 1
-        RATE = config.SAMPLE_RATE  # Usually 16000
+        RATE = 16000
         
         p = pyaudio.PyAudio()
         stream = p.open(
@@ -47,7 +56,7 @@ class SpeechToText:
             frames_per_buffer=CHUNK
         )
         
-        self.logger.info("🎤 Recording (speak clearly, you have 10 seconds)...")
+        self.logger.info(f"🎤 Recording (speak clearly, you have {duration} seconds)...")
         
         frames = []
         chunks = int(RATE / CHUNK * duration)
@@ -99,7 +108,7 @@ class SpeechToText:
             
             self.logger.info(f"Transcription: {text}")
             return text
-            
+        
         except Exception as e:
             self.logger.error(f"Transcription error: {e}")
             return ""
@@ -109,7 +118,42 @@ class SpeechToText:
             if os.path.exists(audio_path):
                 os.remove(audio_path)
     
-    def listen(self):
-        """Record and transcribe (main compatibility)"""
-        audio_path = self.record_audio(duration=10)  # ✅ Fixed 10 seconds
+    # ✅ COMPATIBILITY METHODS FOR main.py
+    
+    def record(self, duration=10):
+        """
+        ✅ NEW: Compatibility wrapper for record_audio()
+        
+        Args:
+            duration: Recording duration in seconds
+        
+        Returns:
+            str: Path to temporary WAV file
+        """
+        return self.record_audio(duration)
+    
+    def transcribe(self, audio_path):
+        """
+        ✅ NEW: Compatibility wrapper for transcribe_audio()
+        
+        Args:
+            audio_path: Path to WAV file
+        
+        Returns:
+            str: Transcribed text
+        """
         return self.transcribe_audio(audio_path)
+    
+    def listen(self):
+        """
+        ✅ NEW: Combined record + transcribe (convenience)
+        
+        Returns:
+            str: Transcribed text from 10-second recording
+        """
+        audio_path = self.record_audio(duration=10)
+        return self.transcribe_audio(audio_path)
+    
+    def speak(self, text):
+        """Placeholder for TTS (handled by TextToSpeech class)"""
+        pass
