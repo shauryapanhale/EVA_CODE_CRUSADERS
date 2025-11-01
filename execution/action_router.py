@@ -51,6 +51,10 @@ class ActionRouter:
                     logger.info(f"  -> Vision: Looking for '{target_description}'")
                     
                     screenshot_path = self.screenshot_handler.capture()
+                    if not screenshot_path:
+                        logger.error("  -> Vision: Failed to capture screenshot. Skipping step.")
+                        continue
+
                     elements = self.omniparser.parse_screen(screenshot_path, raw_command).get('elements', [])
                     
                     if not elements:
